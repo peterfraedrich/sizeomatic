@@ -1,0 +1,12 @@
+README.rst
+setup.cfg
+setup.py
+awspricing/__init__.py
+awspricing/cache.py
+awspricing/constants.py
+awspricing/offers.py
+awspricing.egg-info/PKG-INFO
+awspricing.egg-info/SOURCES.txt
+awspricing.egg-info/dependency_links.txt
+awspricing.egg-info/requires.txt
+awspricing.egg-info/top_level.txt
