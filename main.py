@@ -5,7 +5,6 @@ import fire
 import os
 import peewee
 from pprint import pprint
-import awspricing
 import logging
 from pricing import Pricing
 
@@ -17,14 +16,19 @@ class SizeOMatic:
     def __init__(self, region='us-east-1'):
         self.region = region
         os.environ['AWS_DEFAULT_REGION'] = region
-        os.environ['AWSPRICING_USE_CACHE'] = '1'
         DB.init('sizeomatic.db')
         DB.connect()
-        DB.create_tables([instance, ec2options, asg, asgoptions])
 
-    def find(self, timeout=300):
+    def find(self):
+        metrics = {
+            'asg_count' : 0,
+            'asg_opt' : 0,
+            'ec2_count' : 0,
+            'ec2_opt' : 0
+        }
+        DB.drop_tables([instance, ec2options, asg, asgoptions])
+        DB.create_tables([instance, ec2options, asg, asgoptions])
         aws = boto3.client('compute-optimizer')
-        ec2 = boto3.client('ec2')
         print("Getting ASG recommendations...")
         asg_recs = aws.get_auto_scaling_group_recommendations(filters=[{'name':'Finding','values':['NotOptimized']}])['autoScalingGroupRecommendations']
         print("Getting EC2 recommendations...")
@@ -45,7 +49,7 @@ class SizeOMatic:
                 monthly_price=base_cost * 24.0 * 30.0,
             )
             new.save()
-            print(new.arn)
+            metrics['asg_count'] = metrics['asg_count'] + 1
             for o in i['recommendationOptions']:
                 recc_cost = aws_prices.get(o['configuration']['instanceType'])*float(o['configuration']['maxSize'])
                 asg_option = asgoptions.create(
@@ -61,7 +65,7 @@ class SizeOMatic:
                     monthly_delta=(base_cost * 24.0 * 30.0) - (recc_cost*24.0*30.0)
                 )
                 asg_option.save()
-                print('{}:{}'.format(new.arn, asg_option.id))
+                metrics['asg_opt'] = metrics['asg_opt'] + 1
         for i in ec2_recs:
             base_cost = aws_prices.get(i['currentInstanceType'])
             new = instance.create(
@@ -74,7 +78,7 @@ class SizeOMatic:
                 monthly_price=base_cost*24.0*30.0,
             )
             new.save()
-            print(new.arn)
+            metrics['ec2_count'] = metrics['ec2_count'] +  1
             for o in i['recommendationOptions']:
                 recc_cost = aws_prices.get(o['instanceType'])
                 opt = ec2options.create(
@@ -87,7 +91,20 @@ class SizeOMatic:
                     monthly_delta=(base_cost*24.0*30.0)-(recc_cost*24.0*30.0)
                 )
                 opt.save()
-                print('{}:{}'.format(new.arn, ec2options.id))
+                metrics['ec2_opt'] = metrics['ec2_opt'] + 1
+        print('Finished processing recommendations.')
+        print('{:5}|{:5}|{:5}'.format('TYPE', 'NUM', 'RECS'))
+        print('-----|-----|-----')
+        print('{:5}|{:5}|{:5}'.format('ASG', metrics['asg_count'], metrics['asg_opt']))
+        print('{:5}|{:5}|{:5}'.format('EC2', metrics['ec2_count'], metrics['ec2_opt']))
+        return
+
+    def tag(self, dry=True):
+        boto3.client('ec2').create_tags(DryRun=dry, Resources=[x.arn.split('/')[1] for x in instance.select()], Tags=[{'Key':'sizeomatic_status', 'Value':'resize_pending'}])
+        return
+
+    def untag(self, dry=True):
+        boto3.client('ec2').delete_tags(DryRun=dry, Resources=[x.arn.split('/')[1] for x in instance.select()], Tags=[{'Key':'sizeomatic_status'}])
         return
 
 class instance(peewee.Model):
